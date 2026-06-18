@@ -2,8 +2,10 @@
 
 Production-validated reality of which SquadJS signals you can trust. This is the feasibility
 gate: check every requirement here before promising it. **Grepping the core is not enough** —
-several events are *emitted* in source but never *fire* in practice, so source alone will mislead
-you (and a fresh agent that only reads the core will confidently build on a dead event).
+several events are *emitted* in source but have practical gaps — they fire only in some cases (clean
+disconnects but not kicks/bans), can race, or can lag a Squad engine update until the regex is
+patched — so source alone will mislead you (and a fresh agent that only reads the core will
+confidently build on a signal that doesn't behave as its name implies).
 
 ---
 
@@ -13,12 +15,16 @@ SquadJS tracks state with two independent, unsynchronised systems:
 
 | System | Mechanism | Events | Reliability |
 |---|---|---|---|
-| Reactive log parser | regex on the live `SquadGame.log` | `PLAYER_CONNECTED`, `PLAYER_DISCONNECTED`, `PLAYER_WOUNDED`, `NEW_GAME`, `ROUND_ENDED`, … | partially broken |
+| Reactive log parser | regex on the live `SquadGame.log` | `PLAYER_CONNECTED`, `PLAYER_DISCONNECTED`, `PLAYER_WOUNDED`, `NEW_GAME`, `ROUND_ENDED`, … | regex-based; can lag a Squad update |
 | Periodic RCON poll (~30 s) | diff of `ListPlayers` / `ListSquads` | `UPDATED_PLAYER_INFORMATION`, `PLAYER_TEAM_CHANGE`, `PLAYER_SQUAD_CHANGE` | authoritative |
 
 They do not synchronise. Events from one regularly arrive before, after, or instead of their
 counterpart in the other. **`UPDATED_PLAYER_INFORMATION` is the one fully reliable signal — build
 state tracking around it.**
+
+Log-parser events are matched by regex against `SquadGame.log`, so a major Squad **engine** update
+can temporarily break a given event until the regex is patched on `master`. This skill assumes an
+up-to-date `master` checkout of SquadJS — keep it current rather than pinning an old release.
 
 ---
 
@@ -29,10 +35,20 @@ Fires after every `updatePlayerList()`. `server.players` at that moment reflects
 state: present ⇒ on the server; absent ⇒ gone. **Bursts of 3–6 within milliseconds are normal**
 (periodic timer + cache-miss retries + explicit calls). Process idempotently — never assume once.
 
-### `PLAYER_DISCONNECTED` — does NOT fire
-In current Squad the disconnect log line no longer matches, so this event effectively **never
-fires**. Never use it for teardown, headcount, or cleanup. Infer a departure when an `eosID`
-disappears from `server.players` between `UPDATED_PLAYER_INFORMATION` events.
+### `PLAYER_DISCONNECTED` — clean disconnects only; two caveats
+Fires when a player disconnects *cleanly*, parsed by regex from the `SquadGame.log`
+`LogNet: UChannel::Close: Sending CloseBunch …` line. Useful as a fast signal for clean leaves, but
+two caveats make it insufficient on its own:
+
+- **Misses kicks and bans.** Only a *clean* disconnect produces the matched log line, so a kicked or
+  banned player never triggers it (#287).
+- **Can fire with a `null` player.** An RCON/log-parser race (#289, open) means the player may
+  already be gone from the RCON list when it fires — always null-guard the handler.
+
+For *complete* departure detection (clean leaves, kicks, and bans alike) and to sidestep the race,
+treat the RCON poll as the source of truth: infer a departure when an `eosID` disappears from
+`server.players` between `UPDATED_PLAYER_INFORMATION` events. Use `PLAYER_DISCONNECTED` only as a
+supplementary fast-path for clean leaves, never as your sole departure trigger.
 
 ### `PLAYER_CONNECTED` — race, not a sequence point
 The RCON poll often shows a new player *before* `PLAYER_CONNECTED` fires. Register a player the
@@ -58,7 +74,7 @@ approximation, never exact.
 
 | Requested capability | Why it's impossible |
 |---|---|
-| React the instant a player disconnects | `PLAYER_DISCONNECTED` never fires; only poll-based inference (~30 s granularity). |
+| Detect *every* player departure (incl. kicks/bans) from one event | `PLAYER_DISCONNECTED` covers only clean disconnects (#287) and can race to a `null` player (#289); complete departure detection means diffing `server.players` on the ~30 s RCON poll. |
 | Kick/penalise a player "on disconnect" | They are already gone — even if you detect it, `AdminKick` is a no-op on a closed connection. A temp-ban is the only durable penalty. |
 | Player position / map grid / death coordinates | No log line or RCON command carries position. Player object has no x/y/z. |
 | Player health / HP / stamina | Not exposed anywhere. |

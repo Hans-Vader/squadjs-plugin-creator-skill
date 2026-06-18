@@ -82,7 +82,7 @@ digraph feasibility {
 
 | Request | Reality |
 |---|---|
-| "do X when a player disconnects" | `PLAYER_DISCONNECTED` is emitted in source but **effectively never fires** in current Squad. Infer departures from a player vanishing from `server.players` on `UPDATED_PLAYER_INFORMATION`. |
+| get a single reliable "player left" event covering **all** departures | `PLAYER_DISCONNECTED` fires for clean disconnects only — not kicks/bans (#287) — and can pass a `null` player (#289). Diff `server.players` on `UPDATED_PLAYER_INFORMATION` for complete departure detection. |
 | "react when the round goes live / staging ends" | No such event. `NEW_GAME` fires when staging *begins* (~260 s before live). Approximate with a `setTimeout` from `NEW_GAME`. |
 | player position / map coordinates / grid | No event or RCON command exposes player or death coordinates. The player object has no x/y/z. |
 | player health / HP / stamina | Not exposed anywhere. |
@@ -101,7 +101,7 @@ Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.switchTeam(any
 | Mistake | Fix |
 |---|---|
 | `this.server.removeEventListener(...)` in `unmount` | **It does not exist** on the Node `EventEmitter` server — it throws `TypeError` and the listener leaks. Use `this.server.removeListener(...)` (or `.off(...)`). Many bundled/example plugins (including `activity-tracker`) use the broken form — do not copy it. |
-| Building a feature on `PLAYER_DISCONNECTED` | It does not fire. Diff `server.players` on `UPDATED_PLAYER_INFORMATION` instead. |
+| Relying on `PLAYER_DISCONNECTED` as your sole departure trigger | It catches clean disconnects only (not kicks/bans) and can fire with a `null` player. Use it as a fast supplement; diff `server.players` on `UPDATED_PLAYER_INFORMATION` for complete detection. |
 | `this.server.rcon.kick(...)` or other invented methods | Only `broadcast`/`setFogOfWar`/`warn`/`ban`/`switchTeam`/`get*`/`execute` exist. Kick = `execute('AdminKick "<id>" <reason>')`. |
 | Reading invented payload fields (`data.location.x`, `health`) | They do not exist. Use only the fields listed in `api-reference.md`. Do not write dead branches for fields that "might" exist later. |
 | `setInterval`/`setTimeout` not cleared in `unmount` | Store the handle and clear it in `unmount` alongside listener removal. |

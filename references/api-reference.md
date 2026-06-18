@@ -51,7 +51,7 @@ does not exist and throws.
 | Event | Fires when | Payload fields |
 |---|---|---|
 | `PLAYER_CONNECTED` | player join logged | `player`, `steamID`, `eosID`, `ip`, `playerSuffix` (race-prone — see reliability) |
-| `PLAYER_DISCONNECTED` | (intended) player leaves | `player` — **effectively never fires; do not use** |
+| `PLAYER_DISCONNECTED` | player leaves cleanly | `player` — **clean disconnects only** (not kicks/bans, #287); can race to a **`null` player** (#289 — null-guard); for complete departure detection diff `server.players` on `UPDATED_PLAYER_INFORMATION` |
 | `PLAYER_WOUNDED` | player downed | `victim`, `attacker`, `weapon`, `damage`, `teamkill` (bool), `time` |
 | `TEAMKILL` | a wound where attacker & victim share a team | same payload as `PLAYER_WOUNDED` (both `attacker` & `victim` always non-null) |
 | `PLAYER_DIED` | downed player gives up / bleeds out | `victim`, `attacker`, `weapon`, `damage`, `time` |
@@ -214,9 +214,3 @@ connector — spread it: `...DiscordBasePlugin.optionsSpecification`.
 - `sqlite` / `mysql` / `postgres` — a Sequelize dialect config → a Sequelize instance
   (referenced by a `connector: 'sequelize'` option).
 
-## 10. Multi-file plugins (large plugins)
-
-For big plugins, keep a thin plugin entry in `squad-server/plugins/` and split logic into
-`squad-server/utils/` modules (database layer, command handlers, Discord helpers). See
-`squadjs-elo-tracker` / `squadjs-team-balancer` for the pattern. No template is bundled for this —
-start from one of the three templates and extract modules as it grows.

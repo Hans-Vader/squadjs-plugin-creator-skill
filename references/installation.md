@@ -8,10 +8,6 @@ A single-file plugin goes in the SquadJS install's plugin directory:
 <squadjs>/squad-server/plugins/my-plugin.js      # relative import './base-plugin.js' resolves here
 ```
 
-Multi-file plugins keep the entry in `plugins/` and split helpers into
-`<squadjs>/squad-server/utils/`. The plugin is loaded as an ES module (`import`/`export`) — no
-per-plugin `package.json` is needed.
-
 ## 2. Register it in `config.json`
 
 The `"plugin"` value **must equal the exported class name** (SquadJS loads by class name). Each
@@ -80,6 +76,6 @@ There is no bundled mock harness — verify against a running SquadJS instance:
 5. **DB plugins.** Confirm the table is created on first run and the data persists across a full
    SquadJS restart.
 
-If a behaviour can't be verified because the underlying signal doesn't fire (e.g. anything built
-on `PLAYER_DISCONNECTED`), that's a feasibility problem, not a config problem — revisit
-`event-reliability.md`.
+If a behaviour can't be verified because the underlying signal doesn't exist or is incomplete (e.g.
+complete departure detection from `PLAYER_DISCONNECTED`, which misses kicks/bans), that's a
+feasibility problem, not a config problem — revisit `event-reliability.md`.
