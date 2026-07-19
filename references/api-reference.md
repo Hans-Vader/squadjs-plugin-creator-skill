@@ -105,11 +105,64 @@ does not exist and throws.
 
 ## 3. Chat commands — `CHAT_COMMAND:<name>`
 
-When a chat message starts with `!`, SquadJS also emits `CHAT_COMMAND:<word>` (lowercased)
-with the same payload as `CHAT_MESSAGE`, except `message` holds only the arguments after the
-command word. Register `` this.server.on(`CHAT_COMMAND:${this.options.commandPrefix}`, h) ``.
+When a chat message contains a `!word` — matched **anywhere** in the line by `/!([^ ]+) ?(.*)/`,
+not only at the start (so `gg !bug` fires too) — SquadJS also emits `CHAT_COMMAND:<word>`, with
+`word` **lowercased and stripped of the `!`**, same payload as `CHAT_MESSAGE` except `message` holds
+only the text after `word`. Register the bare word: `` this.server.on(`CHAT_COMMAND:${this.options.command}`, h) ``.
 Filter on `data.chat` (e.g. require `'ChatAdmin'` for admin-only commands). Reply privately with
 `this.server.rcon.warn(data.player.eosID, '…')`.
+
+### Multiple / configurable / aliased trigger commands
+
+The core parses commands with a **fixed `!`**: `` data.message.match(/!([^ ]+) ?(.*)/) `` emits
+`CHAT_COMMAND:<first-word-lowercased>` with `message` set to the rest — so `!set timer 30` fires
+`CHAT_COMMAND:set` (message `"timer 30"`). One listener keys on **one** `!word`, but that word can
+come from config and you may register as many listeners as you like.
+
+**Idiomatic pattern — loop `CHAT_COMMAND:${cmd}` over the configured list.** For a configurable list
+or aliases, normalize a string-or-array option to an array and register one listener per entry, using
+a single bound handler mirrored in `unmount()`. This is what the real plugins do
+(`discord-admin-request`, `rally-timer`):
+
+```js
+constructor(server, options, connectors) {
+  super(server, options, connectors);
+  this.onCommand = this.onCommand.bind(this);                    // bind ONCE — same ref for on & removeListener
+  this.commands = Array.isArray(this.options.commands)          // accept a string OR an array
+    ? this.options.commands : [this.options.commands];
+}
+mount()   { for (const c of this.commands) this.server.on(`CHAT_COMMAND:${c}`, this.onCommand); }
+unmount() { for (const c of this.commands) this.server.removeListener(`CHAT_COMMAND:${c}`, this.onCommand); }
+```
+
+Declare the option as an array (§8); the emitted event name is **lowercased and has no `!`**, so
+register the bare, lowercased word (`CHAT_COMMAND:admin`, never `CHAT_COMMAND:!Admin` — that never
+fires). Bind the handler in the constructor and pass that **same reference** to every
+`on`/`removeListener`; a fresh arrow per `CHAT_COMMAND` (as `timer.js` does — and it registers no
+`unmount` at all) leaks one listener per alias on reload (see the `.on(arrow)` mistake in `SKILL.md`).
+
+**Match `CHAT_MESSAGE` yourself only when `CHAT_COMMAND` can't express the trigger** — it only fires
+on a `!`-prefixed word and keys on that one word alone. Drop to a plain `CHAT_MESSAGE` listener for: a
+configurable **prefix you parse yourself** (a `commandPrefix` that may be a string **or** array,
+possibly without a `!`, then your own subcommand/arg split — the `switch` plugin), a **multi-word**
+trigger (`!set timer` — a `CHAT_COMMAND:"set timer"` listener never fires), or a match not keyed on
+`!`. One handler then runs on **every** chat line, so match cheaply and `return` early:
+
+```js
+onChatMessage(info) {
+  const message = info.message.toLowerCase();
+  // exact-word aliases (no prefix, no arguments) — e.g. !bug / !stuck
+  if (this.options.doubleSwitchCommands.some((c) => c.toLowerCase() === message))
+    return this.doubleSwitch(info.player?.eosID);
+  // prefix that may be a string OR an array of prefixes
+  const prefix = typeof this.options.commandPrefix === 'string'
+    ? (message.startsWith(this.options.commandPrefix.toLowerCase()) ? this.options.commandPrefix : null)
+    : this.options.commandPrefix.find((c) => message.startsWith(c.toLowerCase()));
+  if (!prefix) return;
+  const args = message.slice(prefix.length).trim().split(' ').filter(Boolean); // args[0] = subcommand
+  // …dispatch on args[0]…
+}
+```
 
 ---
 
@@ -134,6 +187,21 @@ Pass any Squad admin command verbatim. Verified in use across plugins:
 `AdminRemovePlayerFromSquad`, `AdminChangeLayer <layer>`, `AdminSetNextLayer <layer>`,
 `AdminEndMatch`, `AdminRestartMatch`, `AdminDemoteCommander`, `AdminRenameSquad`.
 If Squad's admin console supports it, `execute()` can send it; if it doesn't, SquadJS can't do it.
+
+### Double-switch — unstick a bugged player without a net team change
+
+Call `switchTeam` **twice** with a short delay between: the player lands on the other team and
+returns to their own, which re-spawns/unsticks a bugged pawn without actually changing sides. This
+is the mechanism behind `!bug`/`!stuck`-style commands.
+
+```js
+await this.server.rcon.switchTeam(anyID);                              // → AdminForceTeamChange
+await new Promise((r) => setTimeout(r, this.options.doubleSwitchDelaySeconds * 1000));
+await this.server.rcon.switchTeam(anyID);                              // …and back
+```
+
+The awaited one-shot delay resolves on its own — nothing to clear in `unmount`. Make the gap
+configurable (`doubleSwitchDelaySeconds`, default `1`).
 
 ---
 
@@ -169,6 +237,31 @@ If Squad's admin console supports it, `execute()` can send it; if it doesn't, Sq
 or null), `possessClassname` (only after `PLAYER_POSSESS`).
 **There is no position/x/y/z, no health, no kill/death counters** — SquadJS does not track them.
 `eosID` is the stable primary id; `steamID` is the fallback.
+
+**Faction / team short name → `teamID` (convention-based, NOT a real field).** SquadJS exposes
+**no** faction identifier per team: `teamID` is only `1`/`2` and which faction each maps to flips
+every round, and `Squad.teamName` is the *full* name ("United States Army"), not the short code
+("USA"). But Squad names every kit `role` classname `<FACTION>_<role>` — `USA_Rifleman_01`,
+`RGF_Medic_01`, `MEA_SL_01` — so you can resolve an admin-typed short name to the live numeric team
+by finding the first player whose `role` starts with it and reading their `teamID`:
+
+```js
+getTeamIDFromShortName(shortName) {
+  const p = this.server.players.find(
+    (pl) => pl.role?.toLowerCase().startsWith(shortName.toLowerCase())); // role prefix = faction code
+  return p ? p.teamID : null;   // null ⇒ that faction has no player currently on the server
+}
+```
+
+This is a **naming-convention inference, not an API guarantee** — do not present it to a user as a
+first-class faction field. It returns `null` (or misresolves) if no player of that faction is
+connected, or if a faction's role classnames don't start with the token. (`role` is always a
+non-empty string for a *listed* player — the `ListPlayers` parser drops rows with no role, so a
+spectator is **absent** from `server.players`, not present with an empty `role`. The source safely
+omits the `?.`; the guard above is harmless belt-and-suspenders, not protection against a throw
+that can't happen.) Prefer this over hard-coding `teamID` 1/2 (not stable across rounds); the documented-but-clumsy
+alternative is a config alias map onto `Squad.teamName`. Right after `NEW_GAME`, `teamID` is
+transiently `null` — see `event-reliability.md`.
 
 **Squad** (`server.squads[i]`): `squadID` (number), `squadName`, `size`, `locked`
 (string `"True"`/`"False"` as parsed), `creatorName`, `teamID` (number), `teamName`,
@@ -213,4 +306,15 @@ connector — spread it: `...DiscordBasePlugin.optionsSpecification`.
 - `discord` — a Discord bot token → a `discord.js` client (`this.options.discordClient`).
 - `sqlite` / `mysql` / `postgres` — a Sequelize dialect config → a Sequelize instance
   (referenced by a `connector: 'sequelize'` option).
+
+## 10. Multi-file plugins (large plugins)
+
+Give a large plugin its **own directory** under `squad-server/plugins/<plugin-name>/` and keep the
+plugin's own modules there — database layer, command handlers, Discord helpers — self-contained,
+rather than scattering them into the shared `squad-server/utils/` (that dir is for framework-wide
+helpers). Keep the entry class where the loader picks it up: the stock `plugins/index.js` auto-loads
+only top-level `.js` files in `plugins/`, so the entry stays a `.js` file the loader imports (e.g.
+`plugins/<plugin-name>.js`) that pulls the rest in from `./<plugin-name>/`. No template is bundled
+for this — start from one of the three templates and extract modules into the plugin's directory as
+it grows.
 

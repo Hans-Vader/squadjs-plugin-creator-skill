@@ -96,11 +96,22 @@ Most-used events: `CHAT_COMMAND:<name>`, `CHAT_MESSAGE`, `PLAYER_WOUNDED`, `PLAY
 Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.switchTeam(anyID)`,
 `.execute(rawAdminCommand)`. Full catalog + every payload shape: `references/api-reference.md`.
 
+Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
+- **Team by faction short name, not `teamID`.** No faction field exists; `teamID` 1/2 flips each
+  round. Resolve a short name (`"USA"`) via the `role` classname prefix (`USA_Rifleman_01`) — a
+  naming convention, not an API guarantee.
+- **Configurable / aliased command lists**: loop and register `CHAT_COMMAND:${cmd}` per alias
+  (normalize a string-or-array option to an array, bind once, mirror in `unmount`); match
+  `CHAT_MESSAGE` yourself only when the trigger isn't a clean single `!word` (see §3).
+- **Double-switch to unstick a bugged player** (§4): call `switchTeam` twice with a short delay —
+  the player leaves and returns to their own team, re-spawning the pawn with no net side change.
+
 ## Common mistakes (every one observed in baseline testing)
 
 | Mistake | Fix |
 |---|---|
 | `this.server.removeEventListener(...)` in `unmount` | **It does not exist** on the Node `EventEmitter` server — it throws `TypeError` and the listener leaks. Use `this.server.removeListener(...)` (or `.off(...)`). Many bundled/example plugins (including `activity-tracker`) use the broken form — do not copy it. |
+| `.on(event, (data) => this.onFoo(data))` then `.removeListener(event, this.onFoo)` in `unmount` | `removeListener` matches by function **reference**, not name — the anonymous arrow registered in `mount` is a different function object than `this.onFoo`, so the call is a silent no-op and the listener leaks (no error thrown). Bind once in the constructor (`this.onFoo = this.onFoo.bind(this)`) and pass that same bound reference — never a fresh wrapper — to both `.on()` and `.removeListener()`. |
 | Relying on `PLAYER_DISCONNECTED` as your sole departure trigger | It catches clean disconnects only (not kicks/bans) and can fire with a `null` player. Use it as a fast supplement; diff `server.players` on `UPDATED_PLAYER_INFORMATION` for complete detection. |
 | `this.server.rcon.kick(...)` or other invented methods | Only `broadcast`/`setFogOfWar`/`warn`/`ban`/`switchTeam`/`get*`/`execute` exist. Kick = `execute('AdminKick "<id>" <reason>')`. |
 | Reading invented payload fields (`data.location.x`, `health`) | They do not exist. Use only the fields listed in `api-reference.md`. Do not write dead branches for fields that "might" exist later. |
