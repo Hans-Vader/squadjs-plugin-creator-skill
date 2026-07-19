@@ -111,6 +111,34 @@ command word. Register `` this.server.on(`CHAT_COMMAND:${this.options.commandPre
 Filter on `data.chat` (e.g. require `'ChatAdmin'` for admin-only commands). Reply privately with
 `this.server.rcon.warn(data.player.eosID, '…')`.
 
+### Multiple / configurable trigger commands (`CHAT_COMMAND` is single-word only)
+
+`CHAT_COMMAND:<name>` fires for exactly **one fixed, hard-coded** command word. It cannot cover a
+*config-driven array* of triggers, command aliases, or a prefix that may be a string **or** an
+array. When admins should configure a list — e.g. `commandPrefix: ["!switch","!change"]` or
+`doubleSwitchCommands: ["!bug","!stuck","!doubleswitch"]` — listen to plain `CHAT_MESSAGE` (one
+listener, bound once) and match `info.message` yourself:
+
+```js
+onChatMessage(info) {
+  const message = info.message.toLowerCase();
+  // exact-word aliases (no prefix, no arguments) — e.g. !bug / !stuck
+  if (this.options.doubleSwitchCommands.some((c) => c.toLowerCase() === message))
+    return this.doubleSwitch(info.player?.eosID);
+  // prefix that may be a string OR an array of prefixes
+  const prefix = typeof this.options.commandPrefix === 'string'
+    ? (message.startsWith(this.options.commandPrefix) ? this.options.commandPrefix : null)
+    : this.options.commandPrefix.find((c) => message.startsWith(c.toLowerCase()));
+  if (!prefix) return;
+  const args = message.slice(prefix.length).trim().split(' ').filter(Boolean); // args[0] = subcommand
+  // …dispatch on args[0]…
+}
+```
+
+Declare each such option as an array with `default: []` (§8). One `CHAT_MESSAGE` handler runs on
+every chat line — match cheaply and `return` early — versus N `CHAT_COMMAND:<alias>` listeners you
+would have to register in `mount()` and mirror exactly in `unmount()`.
+
 ---
 
 ## 4. RCON methods — `this.server.rcon.*`
@@ -134,6 +162,21 @@ Pass any Squad admin command verbatim. Verified in use across plugins:
 `AdminRemovePlayerFromSquad`, `AdminChangeLayer <layer>`, `AdminSetNextLayer <layer>`,
 `AdminEndMatch`, `AdminRestartMatch`, `AdminDemoteCommander`, `AdminRenameSquad`.
 If Squad's admin console supports it, `execute()` can send it; if it doesn't, SquadJS can't do it.
+
+### Double-switch — unstick a bugged player without a net team change
+
+Call `switchTeam` **twice** with a short delay between: the player lands on the other team and
+returns to their own, which re-spawns/unsticks a bugged pawn without actually changing sides. This
+is the mechanism behind `!bug`/`!stuck`-style commands.
+
+```js
+await this.server.rcon.switchTeam(anyID);                              // → AdminForceTeamChange
+await new Promise((r) => setTimeout(r, this.options.doubleSwitchDelaySeconds * 1000));
+await this.server.rcon.switchTeam(anyID);                              // …and back
+```
+
+The awaited one-shot delay resolves on its own — nothing to clear in `unmount`. Make the gap
+configurable (`doubleSwitchDelaySeconds`, default `1`).
 
 ---
 
@@ -169,6 +212,29 @@ If Squad's admin console supports it, `execute()` can send it; if it doesn't, Sq
 or null), `possessClassname` (only after `PLAYER_POSSESS`).
 **There is no position/x/y/z, no health, no kill/death counters** — SquadJS does not track them.
 `eosID` is the stable primary id; `steamID` is the fallback.
+
+**Faction / team short name → `teamID` (convention-based, NOT a real field).** SquadJS exposes
+**no** faction identifier per team: `teamID` is only `1`/`2` and which faction each maps to flips
+every round, and `Squad.teamName` is the *full* name ("United States Army"), not the short code
+("USA"). But Squad names every kit `role` classname `<FACTION>_<role>` — `USA_Rifleman_01`,
+`RGF_Medic_01`, `MEA_SL_01` — so you can resolve an admin-typed short name to the live numeric team
+by finding the first player whose `role` starts with it and reading their `teamID`:
+
+```js
+getTeamIDFromShortName(shortName) {
+  const p = this.server.players.find(
+    (pl) => pl.role?.toLowerCase().startsWith(shortName.toLowerCase())); // role prefix = faction code
+  return p ? p.teamID : null;   // null ⇒ that faction has no player currently on the server
+}
+```
+
+This is a **naming-convention inference, not an API guarantee** — do not present it to a user as a
+first-class faction field. It returns `null` (or misresolves) if no player of that faction is
+connected, or if a faction's role classnames don't start with the token. Always guard `role` with
+`?.` — spectators / not-yet-spawned players have an empty `role` and would otherwise throw. Prefer
+this over hard-coding `teamID` 1/2 (not stable across rounds); the documented-but-clumsy
+alternative is a config alias map onto `Squad.teamName`. Right after `NEW_GAME`, `teamID` is
+transiently `null` — see `event-reliability.md`.
 
 **Squad** (`server.squads[i]`): `squadID` (number), `squadName`, `size`, `locked`
 (string `"True"`/`"False"` as parsed), `creatorName`, `teamID` (number), `teamName`,

@@ -96,6 +96,13 @@ Most-used events: `CHAT_COMMAND:<name>`, `CHAT_MESSAGE`, `PLAYER_WOUNDED`, `PLAY
 Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.switchTeam(anyID)`,
 `.execute(rawAdminCommand)`. Full catalog + every payload shape: `references/api-reference.md`.
 
+Two non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
+- **Team by faction short name, not `teamID`.** No faction field exists; `teamID` 1/2 flips each
+  round. Resolve a short name (`"USA"`) via the `role` classname prefix (`USA_Rifleman_01`) — a
+  naming convention, not an API guarantee. Guard `role` with `?.`.
+- **Configurable / aliased command lists** (`commandPrefix`, `doubleSwitchCommands` arrays):
+  `CHAT_COMMAND:<name>` is single-word only — match `CHAT_MESSAGE` yourself against the array.
+
 ## Common mistakes (every one observed in baseline testing)
 
 | Mistake | Fix |
