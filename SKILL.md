@@ -100,8 +100,9 @@ Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
 - **Team by faction short name, not `teamID`.** No faction field exists; `teamID` 1/2 flips each
   round. Resolve a short name (`"USA"`) via the `role` classname prefix (`USA_Rifleman_01`) — a
   naming convention, not an API guarantee.
-- **Configurable / aliased command lists** (`commandPrefix`, `doubleSwitchCommands` arrays):
-  `CHAT_COMMAND:<name>` is single-word only — match `CHAT_MESSAGE` yourself against the array.
+- **Configurable / aliased command lists**: loop and register `CHAT_COMMAND:${cmd}` per alias
+  (normalize a string-or-array option to an array, bind once, mirror in `unmount`); match
+  `CHAT_MESSAGE` yourself only when the trigger isn't a clean single `!word` (see §3).
 - **Double-switch to unstick a bugged player** (§4): call `switchTeam` twice with a short delay —
   the player leaves and returns to their own team, re-spawning the pawn with no net side change.
 

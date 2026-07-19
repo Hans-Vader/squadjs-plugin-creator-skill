@@ -105,19 +105,48 @@ does not exist and throws.
 
 ## 3. Chat commands — `CHAT_COMMAND:<name>`
 
-When a chat message starts with `!`, SquadJS also emits `CHAT_COMMAND:<word>` (lowercased)
-with the same payload as `CHAT_MESSAGE`, except `message` holds only the arguments after the
-command word. Register `` this.server.on(`CHAT_COMMAND:${this.options.commandPrefix}`, h) ``.
+When a chat message contains a `!word` — matched **anywhere** in the line by `/!([^ ]+) ?(.*)/`,
+not only at the start (so `gg !bug` fires too) — SquadJS also emits `CHAT_COMMAND:<word>`, with
+`word` **lowercased and stripped of the `!`**, same payload as `CHAT_MESSAGE` except `message` holds
+only the text after `word`. Register the bare word: `` this.server.on(`CHAT_COMMAND:${this.options.command}`, h) ``.
 Filter on `data.chat` (e.g. require `'ChatAdmin'` for admin-only commands). Reply privately with
 `this.server.rcon.warn(data.player.eosID, '…')`.
 
-### Multiple / configurable trigger commands (`CHAT_COMMAND` is single-word only)
+### Multiple / configurable / aliased trigger commands
 
-`CHAT_COMMAND:<name>` fires for exactly **one fixed, hard-coded** command word. It cannot cover a
-*config-driven array* of triggers, command aliases, or a prefix that may be a string **or** an
-array. When admins should configure a list — e.g. `commandPrefix: ["!switch","!change"]` or
-`doubleSwitchCommands: ["!bug","!stuck","!doubleswitch"]` — listen to plain `CHAT_MESSAGE` (one
-listener, bound once) and match `info.message` yourself:
+The core parses commands with a **fixed `!`**: `` data.message.match(/!([^ ]+) ?(.*)/) `` emits
+`CHAT_COMMAND:<first-word-lowercased>` with `message` set to the rest — so `!set timer 30` fires
+`CHAT_COMMAND:set` (message `"timer 30"`). One listener keys on **one** `!word`, but that word can
+come from config and you may register as many listeners as you like.
+
+**Idiomatic pattern — loop `CHAT_COMMAND:${cmd}` over the configured list.** For a configurable list
+or aliases, normalize a string-or-array option to an array and register one listener per entry, using
+a single bound handler mirrored in `unmount()`. This is what the real plugins do
+(`discord-admin-request`, `rally-timer`):
+
+```js
+constructor(server, options, connectors) {
+  super(server, options, connectors);
+  this.onCommand = this.onCommand.bind(this);                    // bind ONCE — same ref for on & removeListener
+  this.commands = Array.isArray(this.options.commands)          // accept a string OR an array
+    ? this.options.commands : [this.options.commands];
+}
+mount()   { for (const c of this.commands) this.server.on(`CHAT_COMMAND:${c}`, this.onCommand); }
+unmount() { for (const c of this.commands) this.server.removeListener(`CHAT_COMMAND:${c}`, this.onCommand); }
+```
+
+Declare the option as an array (§8); the emitted event name is **lowercased and has no `!`**, so
+register the bare, lowercased word (`CHAT_COMMAND:admin`, never `CHAT_COMMAND:!Admin` — that never
+fires). Bind the handler in the constructor and pass that **same reference** to every
+`on`/`removeListener`; a fresh arrow per `CHAT_COMMAND` (as `timer.js` does — and it registers no
+`unmount` at all) leaks one listener per alias on reload (see the `.on(arrow)` mistake in `SKILL.md`).
+
+**Match `CHAT_MESSAGE` yourself only when `CHAT_COMMAND` can't express the trigger** — it only fires
+on a `!`-prefixed word and keys on that one word alone. Drop to a plain `CHAT_MESSAGE` listener for: a
+configurable **prefix you parse yourself** (a `commandPrefix` that may be a string **or** array,
+possibly without a `!`, then your own subcommand/arg split — the `switch` plugin), a **multi-word**
+trigger (`!set timer` — a `CHAT_COMMAND:"set timer"` listener never fires), or a match not keyed on
+`!`. One handler then runs on **every** chat line, so match cheaply and `return` early:
 
 ```js
 onChatMessage(info) {
@@ -134,10 +163,6 @@ onChatMessage(info) {
   // …dispatch on args[0]…
 }
 ```
-
-Declare each such option as an array with `default: []` (§8). One `CHAT_MESSAGE` handler runs on
-every chat line — match cheaply and `return` early — versus N `CHAT_COMMAND:<alias>` listeners you
-would have to register in `mount()` and mirror exactly in `unmount()`.
 
 ---
 
