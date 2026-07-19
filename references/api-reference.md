@@ -127,7 +127,7 @@ onChatMessage(info) {
     return this.doubleSwitch(info.player?.eosID);
   // prefix that may be a string OR an array of prefixes
   const prefix = typeof this.options.commandPrefix === 'string'
-    ? (message.startsWith(this.options.commandPrefix) ? this.options.commandPrefix : null)
+    ? (message.startsWith(this.options.commandPrefix.toLowerCase()) ? this.options.commandPrefix : null)
     : this.options.commandPrefix.find((c) => message.startsWith(c.toLowerCase()));
   if (!prefix) return;
   const args = message.slice(prefix.length).trim().split(' ').filter(Boolean); // args[0] = subcommand
@@ -230,9 +230,11 @@ getTeamIDFromShortName(shortName) {
 
 This is a **naming-convention inference, not an API guarantee** — do not present it to a user as a
 first-class faction field. It returns `null` (or misresolves) if no player of that faction is
-connected, or if a faction's role classnames don't start with the token. Always guard `role` with
-`?.` — spectators / not-yet-spawned players have an empty `role` and would otherwise throw. Prefer
-this over hard-coding `teamID` 1/2 (not stable across rounds); the documented-but-clumsy
+connected, or if a faction's role classnames don't start with the token. (`role` is always a
+non-empty string for a *listed* player — the `ListPlayers` parser drops rows with no role, so a
+spectator is **absent** from `server.players`, not present with an empty `role`. The source safely
+omits the `?.`; the guard above is harmless belt-and-suspenders, not protection against a throw
+that can't happen.) Prefer this over hard-coding `teamID` 1/2 (not stable across rounds); the documented-but-clumsy
 alternative is a config alias map onto `Squad.teamName`. Right after `NEW_GAME`, `teamID` is
 transiently `null` — see `event-reliability.md`.
 
@@ -279,4 +281,15 @@ connector — spread it: `...DiscordBasePlugin.optionsSpecification`.
 - `discord` — a Discord bot token → a `discord.js` client (`this.options.discordClient`).
 - `sqlite` / `mysql` / `postgres` — a Sequelize dialect config → a Sequelize instance
   (referenced by a `connector: 'sequelize'` option).
+
+## 10. Multi-file plugins (large plugins)
+
+Give a large plugin its **own directory** under `squad-server/plugins/<plugin-name>/` and keep the
+plugin's own modules there — database layer, command handlers, Discord helpers — self-contained,
+rather than scattering them into the shared `squad-server/utils/` (that dir is for framework-wide
+helpers). Keep the entry class where the loader picks it up: the stock `plugins/index.js` auto-loads
+only top-level `.js` files in `plugins/`, so the entry stays a `.js` file the loader imports (e.g.
+`plugins/<plugin-name>.js`) that pulls the rest in from `./<plugin-name>/`. No template is bundled
+for this — start from one of the three templates and extract modules into the plugin's directory as
+it grows.
 
