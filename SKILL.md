@@ -86,6 +86,7 @@ digraph feasibility {
 | "react when the round goes live / staging ends" | No such event. `NEW_GAME` fires when staging *begins* (~260 s before live). Approximate with a `setTimeout` from `NEW_GAME`. |
 | player position / map coordinates / grid | No event or RCON command exposes player or death coordinates. The player object has no x/y/z. |
 | player health / HP / stamina | Not exposed anywhere. |
+| "which kit/role fired that shot" from the kill event | The `weapon` string is the damage *causer* blueprint and carries no kit information — most weapons are shared across kits. Read `attacker.role` (30 s poll, can lag a kit switch) or track `PLAYER_POSSESS`. A soldier blueprint appearing as `weapon` is the **victim's** kit, not the attacker's (`references/weapon-strings.md` §4). |
 | reliable team data immediately after `NEW_GAME` | `teamID` is `null` transiently (~30 s) for many players right after `NEW_GAME`. |
 | kick / change layer / end match / disband squad | No dedicated wrapper — use `rcon.execute('Admin…')`. Wrappers exist only for `broadcast`, `warn`, `ban`, `switchTeam`, `setFogOfWar`. |
 
@@ -95,6 +96,11 @@ Most-used events: `CHAT_COMMAND:<name>`, `CHAT_MESSAGE`, `PLAYER_WOUNDED`, `PLAY
 `TEAMKILL`, `PLAYER_TEAM_CHANGE`, `NEW_GAME`, `ROUND_ENDED`, `UPDATED_PLAYER_INFORMATION`.
 Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.switchTeam(anyID)`,
 `.execute(rawAdminCommand)`. Full catalog + every payload shape: `references/api-reference.md`.
+
+Anything keyed on **which weapon** or **which kit/role** — killfeeds, weapon bans, per-role stats,
+"warn the marksman", vehicle-kill vs infantry-kill: `references/weapon-strings.md` (blueprint-string
+grammar, tested classifier, role parsing, observed catalogue). The one rule to carry in: the weapon
+string never tells you the attacker's kit — `role` does.
 
 Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
 - **Team by faction short name, not `teamID`.** No faction field exists; `teamID` 1/2 flips each
@@ -119,3 +125,4 @@ Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
 | A `required: true` option whose config value equals its `default` | `BasePlugin` throws at load. Required options must be given a non-default value in config. |
 | `"plugin"` name in config ≠ exported class name | They must match exactly; SquadJS loads plugins by class name. |
 | Using `steamID` as the primary key | `eosID` is the primary id (always present); `steamID` is the fallback. |
+| Handling `PLAYER_WOUNDED` **and** `TEAMKILL` in the same plugin | `TEAMKILL` is emitted *in addition to* `PLAYER_WOUNDED`, carrying the **same object** — so counters increment twice for a teamkill, and mutating `info` in one handler is visible in the other. Listen to one, and branch on `info.teamkill` (truthy test — it is `undefined`, not `false`, when a player could not be resolved). |

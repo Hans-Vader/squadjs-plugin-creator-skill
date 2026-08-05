@@ -53,9 +53,9 @@ does not exist and throws.
 | `PLAYER_CONNECTED` | player join logged | `player`, `steamID`, `eosID`, `ip`, `playerSuffix` (race-prone — see reliability) |
 | `PLAYER_DISCONNECTED` | player leaves cleanly | `player` — **clean disconnects only** (not kicks/bans, #287); can race to a **`null` player** (#289 — null-guard); for complete departure detection diff `server.players` on `UPDATED_PLAYER_INFORMATION` |
 | `PLAYER_WOUNDED` | player downed | `victim`, `attacker`, `weapon`, `damage`, `teamkill` (bool), `time` |
-| `TEAMKILL` | a wound where attacker & victim share a team | same payload as `PLAYER_WOUNDED` (both `attacker` & `victim` always non-null) |
-| `PLAYER_DIED` | downed player gives up / bleeds out | `victim`, `attacker`, `weapon`, `damage`, `time` |
-| `PLAYER_DAMAGED` | damage dealt | `victim`, `attacker`, `weapon`, `damage` |
+| `TEAMKILL` | a wound where attacker & victim share a team | same payload **and the same object** as `PLAYER_WOUNDED` — it is emitted *in addition to* it, from the wound handler only (a teamkilled player who later bleeds out fires `PLAYER_DIED` with `teamkill: true` but **no** second `TEAMKILL`). Both `attacker` & `victim` are always non-null, and self-kills are excluded (`victim.eosID !== attacker.eosID`) — verified against 40,325 live teamkills |
+| `PLAYER_DIED` | downed player gives up / bleeds out | `victim`, `attacker`, `weapon`, `damage`, `teamkill` (bool), `time` |
+| `PLAYER_DAMAGED` | damage dealt | `victim`, `attacker`, `weapon`, `damage`, `teamkill` (bool) |
 | `PLAYER_REVIVED` | medic revive | `victim`, `attacker`, `reviver` |
 | `PLAYER_POSSESS` | player possesses a vehicle/role | `player`, `possessClassname` |
 | `PLAYER_UNPOSSESS` | player unpossesses | `player` |
@@ -64,6 +64,15 @@ does not exist and throws.
 | `PLAYER_BANNED` | a ban occurred | `player`, `eosID` |
 | `PLAYER_AUTO_KICKED` | SquadJS auto-kick fired | player info |
 | `DEPLOYABLE_DAMAGED` | a FOB/HAB/deployable is damaged | `player` (attacker), `deployable`, `weapon`, `damage`, `damageType`, `healthRemaining` |
+
+`teamkill` is set on `PLAYER_DAMAGED`, `PLAYER_WOUNDED` and `PLAYER_DIED`, but **only when both
+`victim` and `attacker` resolved** — otherwise the property is absent, so it reads `undefined`, not
+`false`. Test it as truthy (`if (info.teamkill)`); never `=== false`.
+
+`weapon` / `possessClassname` are raw blueprint names (`BP_AK74M_1P78`) — the damage *causer*,
+which may be a gun, a projectile, a vehicle wreck or a soldier pawn. Their values, matching rules
+and the full observed catalogue: `references/weapon-strings.md`. **A weapon string does not carry
+the attacker's kit** — for that read `role` (§7) or `PLAYER_POSSESS`'s `possessClassname`.
 
 ### Team / squad (from the RCON poll diff — reliable, fire together)
 
@@ -235,6 +244,10 @@ configurable (`doubleSwitchDelaySeconds`, default `1`).
 `playerID` (number), `name`, `teamID` (number **or `null`**), `squadID` (number or `null`),
 `isLeader` (bool), `role` (string), `steamID`, `eosID`, `playercontroller`, `squad` (squad object
 or null), `possessClassname` (only after `PLAYER_POSSESS`).
+`role` is the kit classname (`USA_Rifleman_01`) and is **the** way to know a player's kit — it is
+refreshed by the 30 s `ListPlayers` poll, so it can lag a kit switch. Kit-role parsing (the
+spellings are wildly inconsistent) and the alternative live signal `possessClassname`:
+`references/weapon-strings.md` §4.
 **There is no position/x/y/z, no health, no kill/death counters** — SquadJS does not track them.
 `eosID` is the stable primary id; `steamID` is the fallback.
 
