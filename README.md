@@ -99,7 +99,12 @@ need to name it explicitly.
 
 **Recommended — install as a plugin.** Paste this into Claude Code:
 
-> Install the creating-squadjs-plugins skill for me: run `claude plugin marketplace add Hans-Vader/squadjs-plugin-creator-skill` and then `claude plugin install creating-squadjs-plugins@squadjs-plugin-creator-skill`. When both succeed, tell me to run /reload-plugins.
+```text
+Install the creating-squadjs-plugins skill for me:
+run `claude plugin marketplace add Hans-Vader/squadjs-plugin-creator-skill`
+and then `claude plugin install creating-squadjs-plugins@squadjs-plugin-creator-skill`.
+When both succeed, tell me to run /reload-plugins.
+```
 
 Or run the two commands yourself:
 
