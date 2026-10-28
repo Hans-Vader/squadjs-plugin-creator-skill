@@ -80,8 +80,8 @@ install this one, drop the repo into your tool's skills directory under a folder
 | Tool | Personal skills directory | How it activates | Project instructions file |
 |---|---|---|---|
 | **Claude Code** | `~/.claude/skills/` (or `claude plugin install`, see below) | `Skill` tool / auto by description; or `/creating-squadjs-plugins` | `CLAUDE.md` |
-| **OpenAI Codex** | `~/.codex/skills/` *or* shared `~/.agents/skills/` | loads natively — just describe the task | `AGENTS.md` |
-| **GitHub Copilot CLI** | `~/.copilot/skills/` *or* shared `~/.agents/skills/` | `skill` tool | `AGENTS.md` |
+| **OpenAI Codex** | shared `~/.agents/skills/` (legacy `~/.codex/skills/` is deprecated) | auto by description; or `$creating-squadjs-plugins` | `AGENTS.md` |
+| **GitHub Copilot CLI** | `~/.copilot/skills/` *or* shared `~/.agents/skills/` | auto by description; or `/creating-squadjs-plugins` | `AGENTS.md` |
 | **Gemini CLI** | `~/.gemini/skills/` *or* shared `~/.agents/skills/` | `activate_skill` tool | `GEMINI.md` |
 
 Two things worth knowing before you start:
@@ -114,8 +114,14 @@ claude plugin install creating-squadjs-plugins@squadjs-plugin-creator-skill
 ```
 
 Then run `/reload-plugins` (or restart Claude Code). Installed as a plugin, the explicit command is
-namespaced: `/creating-squadjs-plugins:creating-squadjs-plugins`. Update later with
-`claude plugin marketplace update squadjs-plugin-creator-skill`.
+namespaced: `/creating-squadjs-plugins:creating-squadjs-plugins`. Update later with:
+
+```bash
+claude plugin marketplace update squadjs-plugin-creator-skill
+claude plugin update creating-squadjs-plugins@squadjs-plugin-creator-skill
+```
+
+then `/reload-plugins`.
 
 **Alternative — clone into the skills directory:**
 
@@ -130,19 +136,17 @@ the repo), clone into `.claude/skills/creating-squadjs-plugins/` inside your pro
 
 ### OpenAI Codex
 
-```bash
-git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
-  ~/.codex/skills/creating-squadjs-plugins
-```
-
-Or install it once into the shared cross-runtime path so Codex, Copilot CLI, and Gemini CLI all see it:
+Codex reads personal skills from the shared cross-runtime path, so this one clone also covers Copilot
+CLI and Gemini CLI:
 
 ```bash
 git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
   ~/.agents/skills/creating-squadjs-plugins
 ```
 
-Codex loads skills natively — there's no separate invoke step; just describe the plugin you want.
+(The older `~/.codex/skills/` still loads but is deprecated — don't install into both, or the skill
+shows up twice.) Codex picks the skill automatically when your request matches; invoke it explicitly
+with `$creating-squadjs-plugins` or via `/skills`.
 
 ### GitHub Copilot CLI
 
@@ -151,8 +155,9 @@ git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
   ~/.copilot/skills/creating-squadjs-plugins
 ```
 
-(Or use the shared `~/.agents/skills/` path shown above.) Copilot CLI exposes a `skill` tool; describe
-the task and it activates the matching skill.
+(Or use the shared `~/.agents/skills/` path shown above.) Copilot CLI picks the skill automatically when
+your request matches; invoke it explicitly with `/creating-squadjs-plugins`, and manage skills with
+`/skills`.
 
 ### Gemini CLI
 
@@ -163,7 +168,7 @@ git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
 
 (Or the shared `~/.agents/skills/` path — when both exist, the `~/.agents/skills/` copy takes
 precedence.) Gemini CLI loads skill metadata at session start and activates the full skill via its
-`activate_skill` tool when your request matches.
+`activate_skill` tool (after you confirm) when your request matches.
 
 > For Claude Code, this GitHub repo doubles as its own plugin marketplace (see
 > [Claude Code](#claude-code) above). It isn't in any official marketplace, and for Codex, Copilot
@@ -245,7 +250,8 @@ Full details, config examples, and the verification checklist are in
 ## Compatibility
 
 This skill uses the open `SKILL.md` format and works in any assistant that supports it — currently Claude
-Code, OpenAI Codex, GitHub Copilot CLI, and Gemini CLI. Tools without native skill support can still
+Code, OpenAI Codex, GitHub Copilot CLI, and Gemini CLI documented above, plus the other clients listed
+at [agentskills.io/clients](https://agentskills.io/clients) (each with its own skills path). Tools without native skill support can still
 benefit: point them at [`SKILL.md`](SKILL.md) and the `references/` files directly as context.
 
 ## License
