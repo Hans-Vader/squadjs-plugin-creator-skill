@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "squadjs-plugin-creator-skill",
+  "description": "Agent skill for building correct SquadJS plugins.",
+  "owner": {
+    "name": "Hans-Vader",
+    "url": "https://github.com/Hans-Vader"
+  },
+  "plugins": [
+    {
+      "name": "creating-squadjs-plugins",
+      "description": "Teaches Claude to build correct SquadJS plugins: real events/RCON only, hard limits, lifecycle-safe templates.",
+      "source": "./",
+      "strict": false,
+      "skills": ["./"],
+      "license": "GPL-3.0",
+      "category": "development"
+    }
+  ]
+}

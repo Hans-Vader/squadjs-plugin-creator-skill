@@ -48,6 +48,7 @@ The skill encodes the reality:
 
 ```
 squadjs-plugin-creator-skill/
+├── .claude-plugin/marketplace.json # lets Claude Code install this repo as a plugin
 ├── SKILL.md                        # the skill: workflow, hard limits, common mistakes
 ├── references/
 │   ├── api-reference.md            # full event / RCON / server / object-shape catalog
@@ -78,7 +79,7 @@ install this one, drop the repo into your tool's skills directory under a folder
 
 | Tool | Personal skills directory | How it activates | Project instructions file |
 |---|---|---|---|
-| **Claude Code** | `~/.claude/skills/` | `Skill` tool / auto by description; or `/creating-squadjs-plugins` | `CLAUDE.md` |
+| **Claude Code** | `~/.claude/skills/` (or `claude plugin install`, see below) | `Skill` tool / auto by description; or `/creating-squadjs-plugins` | `CLAUDE.md` |
 | **OpenAI Codex** | `~/.codex/skills/` *or* shared `~/.agents/skills/` | loads natively — just describe the task | `AGENTS.md` |
 | **GitHub Copilot CLI** | `~/.copilot/skills/` *or* shared `~/.agents/skills/` | `skill` tool | `AGENTS.md` |
 | **Gemini CLI** | `~/.gemini/skills/` *or* shared `~/.agents/skills/` | `activate_skill` tool | `GEMINI.md` |
@@ -95,6 +96,23 @@ SquadJS plugin that …"* or *"Can SquadJS detect …?"*). The skill's descripti
 need to name it explicitly.
 
 ### Claude Code
+
+**Recommended — install as a plugin.** Paste this into Claude Code:
+
+> Install the creating-squadjs-plugins skill for me: run `claude plugin marketplace add Hans-Vader/squadjs-plugin-creator-skill` and then `claude plugin install creating-squadjs-plugins@squadjs-plugin-creator-skill`. When both succeed, tell me to run /reload-plugins.
+
+Or run the two commands yourself:
+
+```bash
+claude plugin marketplace add Hans-Vader/squadjs-plugin-creator-skill
+claude plugin install creating-squadjs-plugins@squadjs-plugin-creator-skill
+```
+
+Then run `/reload-plugins` (or restart Claude Code). Installed as a plugin, the explicit command is
+namespaced: `/creating-squadjs-plugins:creating-squadjs-plugins`. Update later with
+`claude plugin marketplace update squadjs-plugin-creator-skill`.
+
+**Alternative — clone into the skills directory:**
 
 ```bash
 git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
@@ -142,9 +160,9 @@ git clone https://github.com/Hans-Vader/squadjs-plugin-creator-skill.git \
 precedence.) Gemini CLI loads skill metadata at session start and activates the full skill via its
 `activate_skill` tool when your request matches.
 
-> This repo isn't published to any plugin marketplace, so there's no `install` command to run — the
-> clone above is the install. If you later package it as a marketplace plugin, follow your tool's
-> plugin-install flow instead.
+> For Claude Code, this GitHub repo doubles as its own plugin marketplace (see
+> [Claude Code](#claude-code) above). It isn't in any official marketplace, and for Codex, Copilot
+> CLI, and Gemini CLI the clone is the install.
 
 ---
 
