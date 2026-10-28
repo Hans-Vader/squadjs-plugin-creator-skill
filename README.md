@@ -32,14 +32,14 @@ check whether SquadJS can actually do X — and save you from discovering at run
 Without this skill, an assistant will confidently write plugins that look right and fail in production.
 The skill encodes the reality:
 
-- **The real capability surface.** Every event (~28 of them), every RCON/server method, and every
+- **The real capability surface.** Every event (~30 of them), every RCON/server method, and every
   object field — extracted from the SquadJS core, not guessed. See [`references/api-reference.md`](references/api-reference.md).
 - **Which signals you can trust.** `UPDATED_PLAYER_INFORMATION` is the source of truth;
   `PLAYER_DISCONNECTED` catches **clean disconnects only** (not kicks/bans) and can race to a `null` player — for complete departure detection diff `server.players` on `UPDATED_PLAYER_INFORMATION`; `NEW_GAME` marks staging *start* (~260 s before the round is
   live), not "go live"; there is **no** player position, health, or kill counter anywhere. See
   [`references/event-reliability.md`](references/event-reliability.md).
 - **The lifecycle traps that bite everyone.** Use `removeListener`/`off`, never `removeEventListener`
-  (it throws and leaks the listener — many bundled core plugins get this wrong); clear every timer in
+  (it throws and leaks the listener — core plugins did until Oct 2026, many third-party plugins still do); clear every timer in
   `unmount()`; bind handlers in the constructor; `eosID` is the primary id, `steamID` is the fallback.
 - **Ready-made templates** that already bake in the correct lifecycle, so the assistant scaffolds from
   a known-good base instead of from a buggy example.
@@ -183,9 +183,10 @@ connector), keyed on `eosID`.
 | SquadJS **can** | SquadJS **cannot** |
 |---|---|
 | React to wounds, deaths, teamkills, revives, possess/unpossess | Give you player **position / grid / death coordinates** |
+| React to flag captures/neutralizations and deployables being placed; read live tickets (`server.tickets`) — Squad 10.6+ | Tell you **who** captured a flag (capture events carry only the team) |
 | Track players, squads, teams via `UPDATED_PLAYER_INFORMATION` (the reliable source of truth) | Give you player **health / HP / stamina** |
 | Handle chat commands (`CHAT_COMMAND:<name>`) and chat messages | Get one reliable event for **every** departure (`PLAYER_DISCONNECTED` is clean-disconnects-only; misses kicks/bans) |
-| Broadcast, warn, ban, switch teams; run any admin command via `rcon.execute(...)` | Fire an event when the round goes **live** (`NEW_GAME` = staging start, ~260 s early) |
+| Broadcast, warn, kick, ban, switch teams; run any admin command via `rcon.execute(...)` | Fire an event when the round goes **live** (`NEW_GAME` = staging start, ~260 s early) |
 | Post to Discord (`DiscordBasePlugin`) and persist to a DB (Sequelize connector) | Trust `teamID` right after `NEW_GAME` (it's `null` transiently) |
 
 The two-column view is the gist — the authoritative, exhaustive surface lives in

@@ -64,6 +64,18 @@ does not exist and throws.
 | `PLAYER_BANNED` | a ban occurred | `player`, `eosID` |
 | `PLAYER_AUTO_KICKED` | SquadJS auto-kick fired | player info |
 | `DEPLOYABLE_DAMAGED` | a FOB/HAB/deployable is damaged | `player` (attacker), `deployable`, `weapon`, `damage`, `damageType`, `healthRemaining` |
+| `DEPLOYABLE_SPAWNED` | a deployable (FOB radio, HAB, emplacement, …) is placed — Squad 10.6+ | `player` (placer, resolved by eosID → name; may be `null`), `playerName`, `playerID`, `playerEOSID`, `playerSteamID`, `deployable` (`BP_FOBRadio_Woodland_C_2147`), `deployableClassname` (`BP_FOBRadio_Woodland`), `teamID` (**string**), `location` `{x, y, z}`, `time`, `raw` |
+
+### Objectives (log-parsed, Squad 10.6+)
+
+| Event | Fires when | Payload fields |
+|---|---|---|
+| `CAPTURE_ZONE_NEUTRALIZED` | a team neutralizes an owned flag | `flagName` (`03-Village`), `teamID` (neutralizing team, **string**), `previousOwnerTeamID` (**string**), `time`, `raw` |
+| `CAPTURE_ZONE_CAPTURED` | a team fully captures a flag | `flagName`, `teamID` (**string**), `time`, `raw` |
+
+`teamID` on these three log events is the raw regex capture (`"1"`/`"2"`), unlike the numeric
+`player.teamID` — convert with `Number(data.teamID)` before comparing. No player is attached to the
+capture events (who stood on the point is not logged).
 
 ### Team / squad (from the RCON poll diff — reliable, fire together)
 
@@ -77,7 +89,7 @@ does not exist and throws.
 
 | Event | Fires when | Payload fields |
 |---|---|---|
-| `NEW_GAME` | new map finishes loading, **staging begins** (~260 s before live) | `layer` (resolved Layer), `mapClassname`, `layerClassname`, `dlc`, `time`, `raw` |
+| `NEW_GAME` | new map finishes loading, **staging begins** (~260 s before live) | `layer` (resolved Layer or `null`), `mapClassname`, `layerClassname`, `dlc`, `time`, `raw`, `winner` (previous round's winning faction name; `null` on a draw; missing if no round end was logged, e.g. right after a SquadJS start) |
 | `ROUND_ENDED` | match state → post-match | `winner` `{team, faction, subfaction, action, tickets, layer, level}` or `null`; `loser` (same shape) or `null`; `time` |
 | `UPDATED_LAYER_INFORMATION` | layer poll completed | *(none — read `server.currentLayer`)* |
 
@@ -98,8 +110,8 @@ does not exist and throws.
 | Event | Read after it |
 |---|---|
 | `UPDATED_PLAYER_INFORMATION` | `server.players` — **the source of truth** (see reliability) |
-| `UPDATED_SERVER_INFORMATION` | `info` arg + `server` fields |
-| `UPDATED_A2S_INFORMATION` | `info.playerCount` |
+| `UPDATED_SERVER_INFORMATION` | `info` arg + `server` fields (`ShowServerInfo`, polled every **10 s**) |
+| `UPDATED_A2S_INFORMATION` | `info.playerCount` (same poll, emitted together with the above) |
 
 ---
 
@@ -172,13 +184,20 @@ onChatMessage(info) {
 |---|---|---|
 | `broadcast(message)` | `AdminBroadcast` | server-wide message |
 | `warn(anyID, message)` | `AdminWarn` | private to one player; `anyID` = eosID or steamID |
+| `kick(anyID, reason)` | `AdminKick` | |
 | `ban(anyID, length, message)` | `AdminBan` | `length`: `0`=perm, `1m`, `1d`, `1M`, … |
-| `switchTeam(anyID)` | `AdminForceTeamChange` | force a player to the other team |
+| `switchTeam(anyID)` / `forceTeamChange(anyID)` | `AdminForceTeamChange` | force a player to the other team (two names, same command) |
 | `setFogOfWar(mode)` | `AdminSetFogOfWar` | |
 | `getCurrentMap()` | `ShowCurrentMap` | → `{ level, layer }` |
-| `getNextMap()` | `ShowNextMap` | → `{ level, layer }` |
-| `getListPlayers()` / `getSquads()` | `ListPlayers` / `ListSquads` | usually use `server.players`/`server.squads` instead |
+| `getNextMap()` | `ShowNextMap` | → `{ level, layer, toBeVoted }` (`layer` is `null` when `toBeVoted`) |
+| `getListPlayers()` | `ListPlayers` | → player array; usually read `server.players` instead |
+| `getSquads()` | `ListSquads` | → **tuple `[squads, tickets]`** (since Oct 2026); usually read `server.squads` / `server.tickets` instead |
 | `execute(rawCommand)` | *(verbatim)* | **escape hatch** → `Promise<string>` |
+
+Every wrapper returns the `execute()` promise. A failed command (connection closed, or no response
+within 10 s — SquadJS then drops and reopens the RCON connection) **rejects** for callers that
+`await` it, so wrap awaited calls in `try/catch`; fire-and-forget calls are logged and no longer
+crash the process.
 
 ### `execute()` escape hatch — anything without a wrapper
 
@@ -208,7 +227,9 @@ configurable (`doubleSwitchDelaySeconds`, default `1`).
 ## 5. Server methods — `this.server.*`
 
 - `updatePlayerList()`, `updateSquadList()`, `updateLayerInformation()`, `updateServerInformation()`
-  — force a refresh (each also emits its `UPDATED_*` event).
+  — force a refresh (each also emits its `UPDATED_*` event). `updatePlayerList`/`updateSquadList`
+  coalesce parallel callers into one follow-up poll, so calling them often is cheap — but the
+  awaited list is only guaranteed newer than your call, not fresh per caller.
 - `getPlayerBySteamID(id)`, `getPlayerByEOSID(id)`, `getPlayerByAnyID(id)`, `getPlayerByName(name)`,
   `getPlayerByNameSuffix(suffix)`, `getPlayerByController(c)`, `getPlayerByCondition(fn)`.
 - `getSquadByID(teamID, squadID)`, `getSquadByCondition(fn)`.
@@ -220,8 +241,10 @@ configurable (`doubleSwitchDelaySeconds`, default `1`).
 |---|---|
 | `players` | array of player objects (§7) — **truth**: present ⇒ on server |
 | `squads` | array of squad objects (§7) |
-| `currentLayer` | Layer object (may be unavailable / `"Unknown"` after a restart) |
-| `nextLayer` | Layer object (may be a Promise) |
+| `tickets` | `[team1Tickets, team2Tickets]` from the `ListSquads` poll (~30 s; `[]` before the first poll) — index with `teamID - 1` |
+| `currentLayer` | Layer object, or `null` when the layer is not in the layer list / not loaded yet |
+| `nextLayer` | Layer object, or `null` (not set, unknown, or to be voted) |
+| `nextLayerToBeVoted` | `true` when the next layer will be decided by vote |
 | `layerHistory` | array of `{ layer, time }`, newest first |
 | `a2sPlayerCount` | number (A2S query) |
 | `admins` | object keyed by steamID → permissions |
@@ -235,8 +258,10 @@ configurable (`doubleSwitchDelaySeconds`, default `1`).
 `playerID` (number), `name`, `teamID` (number **or `null`**), `squadID` (number or `null`),
 `isLeader` (bool), `role` (string), `steamID`, `eosID`, `playercontroller`, `squad` (squad object
 or null), `possessClassname` (only after `PLAYER_POSSESS`).
-**There is no position/x/y/z, no health, no kill/death counters** — SquadJS does not track them.
-`eosID` is the stable primary id; `steamID` is the fallback.
+**There is no position/x/y/z, no health, no kill/death counters, no vehicle** — SquadJS does not
+track them (Squad 10.6's `ListPlayers` prints `Party ID`/`Vehicle`, but the parser discards both; for
+"in a vehicle" use `PLAYER_POSSESS`'s `possessClassname`).
+`eosID` is the stable primary id; `steamID` is the fallback and is `null` for Epic Games Store players.
 
 **Faction / team short name → `teamID` (convention-based, NOT a real field).** SquadJS exposes
 **no** faction identifier per team: `teamID` is only `1`/`2` and which faction each maps to flips
@@ -267,8 +292,12 @@ transiently `null` — see `event-reliability.md`.
 (string `"True"`/`"False"` as parsed), `creatorName`, `teamID` (number), `teamName`,
 `creatorSteamID`, `creatorEOSID`.
 
-**Layer** (`server.currentLayer`, `NEW_GAME` `data.layer`): fields such as `name`, `classname`,
-`gamemode`, `layerid`. May read as `"Unknown"` during/after a server restart.
+**Layer** (`server.currentLayer`, `NEW_GAME` `data.layer`; pulled from SquadLayerList `layers.json`
+since Oct 2026): `name`, `classname`, `layerid`, `map.name`, `gamemode`, `numberOfCapturePoints`,
+`lighting` `{name, classname, type}`, `commander`, `factions`, `tickets` (`[team1, team2]` starting
+tickets), `teams[]` `{faction, name, tickets, commander, vehicles[], numberOfTanks,
+numberOfHelicopters}`. Team values can be `null` (e.g. Automation layers). The whole Layer is
+`null` when the layer is not in the list — always guard.
 
 ---
 

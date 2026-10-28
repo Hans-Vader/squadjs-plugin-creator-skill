@@ -15,8 +15,9 @@ SquadJS tracks state with two independent, unsynchronised systems:
 
 | System | Mechanism | Events | Reliability |
 |---|---|---|---|
-| Reactive log parser | regex on the live `SquadGame.log` | `PLAYER_CONNECTED`, `PLAYER_DISCONNECTED`, `PLAYER_WOUNDED`, `NEW_GAME`, `ROUND_ENDED`, … | regex-based; can lag a Squad update |
-| Periodic RCON poll (~30 s) | diff of `ListPlayers` / `ListSquads` | `UPDATED_PLAYER_INFORMATION`, `PLAYER_TEAM_CHANGE`, `PLAYER_SQUAD_CHANGE` | authoritative |
+| Reactive log parser | regex on the live `SquadGame.log` | `PLAYER_CONNECTED`, `PLAYER_DISCONNECTED`, `PLAYER_WOUNDED`, `NEW_GAME`, `ROUND_ENDED`, `CAPTURE_ZONE_*`, `DEPLOYABLE_*`, … | regex-based; can lag a Squad update |
+| Periodic RCON poll (~30 s) | diff of `ListPlayers` / `ListSquads` | `UPDATED_PLAYER_INFORMATION`, `PLAYER_TEAM_CHANGE`, `PLAYER_SQUAD_CHANGE` (+ `server.tickets`) | authoritative |
+| Periodic `ShowServerInfo` poll (10 s) | server info | `UPDATED_SERVER_INFORMATION`, `UPDATED_A2S_INFORMATION` | authoritative for counts/queues |
 
 They do not synchronise. Events from one regularly arrive before, after, or instead of their
 counterpart in the other. **`UPDATED_PLAYER_INFORMATION` is the one fully reliable signal — build
@@ -32,8 +33,9 @@ up-to-date `master` checkout of SquadJS — keep it current rather than pinning 
 
 ### `UPDATED_PLAYER_INFORMATION` — the source of truth
 Fires after every `updatePlayerList()`. `server.players` at that moment reflects current RCON
-state: present ⇒ on the server; absent ⇒ gone. **Bursts of 3–6 within milliseconds are normal**
-(periodic timer + cache-miss retries + explicit calls). Process idempotently — never assume once.
+state: present ⇒ on the server; absent ⇒ gone. Since Oct 2026 parallel `updatePlayerList()` calls
+are coalesced (at most one follow-up per running poll), so the old bursts of 3–6 shrink to ~2 —
+but it still fires back-to-back whenever a lookup or plugin forces a refresh right after a poll. Process idempotently — never assume once.
 
 ### `PLAYER_DISCONNECTED` — clean disconnects only; two caveats
 Fires when a player disconnects *cleanly*, parsed by regex from the `SquadGame.log`
@@ -68,6 +70,18 @@ approximation, never exact.
 ### `ROUND_ENDED` — reliable
 `winner`/`loser` may both be `null` on a draw. Handle the null case.
 
+`NEW_GAME.winner` (the previous round's winning faction name) is reliable since Oct 2026: it takes
+the *last* `DetermineMatchWinner` line (Squad can log a draw and then a winner), is `null` on a
+draw, and is also set on Invasion rounds. It is missing when SquadJS did not see the round end.
+
+### `CAPTURE_ZONE_CAPTURED` / `CAPTURE_ZONE_NEUTRALIZED` / `DEPLOYABLE_SPAWNED` — Squad 10.6+
+Log-parsed, added Oct 2026. They depend on log lines Squad only writes since 10.6 — on older
+servers they never fire. `teamID` is a **string**; capture events carry no player and no
+"who was on the point". Flags are identified by `flagName` only (e.g. `03-Village`), which is not
+mapped to an order/index — derive "how many flags does team X hold" yourself from the event
+stream and reset on `NEW_GAME`. `DEPLOYABLE_SPAWNED.player` can be `null` (lookup race, like
+`PLAYER_DISCONNECTED`); fall back to `playerEOSID`/`playerName`.
+
 ---
 
 ## Hard limits (impossible without modifying the core)
@@ -76,7 +90,7 @@ approximation, never exact.
 |---|---|
 | Detect *every* player departure (incl. kicks/bans) from one event | `PLAYER_DISCONNECTED` covers only clean disconnects (#287) and can race to a `null` player (#289); complete departure detection means diffing `server.players` on the ~30 s RCON poll. |
 | Kick/penalise a player "on disconnect" | They are already gone — even if you detect it, `AdminKick` is a no-op on a closed connection. A temp-ban is the only durable penalty. |
-| Player position / map grid / death coordinates | No log line or RCON command carries position. Player object has no x/y/z. |
+| Player position / map grid / death coordinates | No log line or RCON command carries player position. Player object has no x/y/z. (`DEPLOYABLE_SPAWNED.location` is where a deployable was placed — not a player position stream.) |
 | Player health / HP / stamina | Not exposed anywhere. |
 | Exact "round went live" moment | No staging-end event exists (see `NEW_GAME`). |
 | Trustworthy `teamID` right after `NEW_GAME` | `teamID` is `null` transiently (up to ~30 s, and at full-server scale nearly the whole roster) until the next polls resolve it. |
@@ -85,10 +99,14 @@ approximation, never exact.
 
 ## Other gotchas
 
-- **Layer `"Unknown"` after a restart.** When SquadJS reconnects post server-restart,
-  `server.currentLayer` can read `"Unknown"` through the whole recovery. Detect restart by
-  `a2sPlayerCount === 0` **and** layer `"Unknown"` together; provide a fallback.
-- **`teamID` is `number | null`.** Always guard for `null`, especially around `NEW_GAME`.
+- **Layer `null` after a restart / for unlisted layers.** `server.currentLayer` (and
+  `NEW_GAME.layer`) is `null` until the layer poll succeeds, and stays `null` for a layer missing
+  from the layer list (core plugins then show `"Unknown"`). Detect a restart by
+  `a2sPlayerCount === 0` **and** a `null` layer together; always use `currentLayer?.name`.
+- **`teamID` is `number | null`** on players. Always guard for `null`, especially around
+  `NEW_GAME`. On `CAPTURE_ZONE_*`/`DEPLOYABLE_SPAWNED` it is a string — convert before comparing.
+- **Awaited RCON calls can reject.** A command with no response within 10 s makes SquadJS drop and
+  reopen the RCON connection; every pending command rejects. `try/catch` around `await rcon.*`.
 
 ---
 
@@ -117,8 +135,10 @@ async onUpdatedPlayerInfo() {
 
 - **`removeListener` / `off`, never `removeEventListener`.** The server extends Node's
   `EventEmitter`, which has no `removeEventListener` — calling it throws `TypeError` and the
-  listener leaks. Many bundled SquadJS plugins (and some examples) use the broken form; do not
-  copy them. `mount()` and `unmount()` must register and remove exactly the same set.
+  listener leaks. Core plugins used the broken form until Oct 2026 (many third-party plugins still
+  do); do not copy them. `mount()` and `unmount()` must register and remove exactly the same set.
+  A listener added again and again (e.g. inside a handler) still trips
+  `MaxListenersExceededWarning` — the core raises the limit only by 2 per plugin.
 - **Clear every timer in `unmount`.** Store each `setInterval`/`setTimeout` handle and
   `clearInterval`/`clearTimeout` it in `unmount`, or it leaks across reloads.
 - **Bind handlers in the constructor** (`this.onX = this.onX.bind(this)`) — `server.on` does not

@@ -49,9 +49,9 @@ Not for: modifying the SquadJS core itself, or non-SquadJS Discord bots.
 Do not rely on memory or on copied code — run each check; every one must pass:
 
 - **`grep -n removeEventListener <file>` returns nothing.** It throws `TypeError` at runtime
-  and leaks the listener; use `removeListener`/`off`. This is the single most common bug, and
-  the bundled core plugins (`discord-teamkill.js`, `auto-tk-warn.js`, …) contain it — so if you
-  modelled your code on a core/example plugin, you almost certainly copied it. Fix it.
+  and leaks the listener; use `removeListener`/`off`. This is the single most common bug: the
+  core plugins used it until upstream fixed them in Oct 2026 (PR #446), so plugins modelled on an
+  older checkout or on third-party/example plugins very likely copied it. Fix it.
 - **Listener symmetry:** every `this.server.on(...)` in `mount()` has a matching
   `removeListener` in `unmount()`, and every `setInterval`/`setTimeout` has a matching
   `clearInterval`/`clearTimeout` in `unmount()`.
@@ -84,17 +84,19 @@ digraph feasibility {
 |---|---|
 | get a single reliable "player left" event covering **all** departures | `PLAYER_DISCONNECTED` fires for clean disconnects only — not kicks/bans (#287) — and can pass a `null` player (#289). Diff `server.players` on `UPDATED_PLAYER_INFORMATION` for complete departure detection. |
 | "react when the round goes live / staging ends" | No such event. `NEW_GAME` fires when staging *begins* (~260 s before live). Approximate with a `setTimeout` from `NEW_GAME`. |
-| player position / map coordinates / grid | No event or RCON command exposes player or death coordinates. The player object has no x/y/z. |
+| player position / map coordinates / grid | No event or RCON command exposes player or death coordinates. The player object has no x/y/z. The only coordinates anywhere are the spawn `location` of a deployable on `DEPLOYABLE_SPAWNED`. |
 | player health / HP / stamina | Not exposed anywhere. |
 | reliable team data immediately after `NEW_GAME` | `teamID` is `null` transiently (~30 s) for many players right after `NEW_GAME`. |
-| kick / change layer / end match / disband squad | No dedicated wrapper — use `rcon.execute('Admin…')`. Wrappers exist only for `broadcast`, `warn`, `ban`, `switchTeam`, `setFogOfWar`. |
+| change layer / end match / disband squad | No dedicated wrapper — use `rcon.execute('Admin…')`. Wrappers exist only for `broadcast`, `warn`, `kick`, `ban`, `switchTeam`/`forceTeamChange`, `setFogOfWar`. |
 
 ## Quick reference
 
 Most-used events: `CHAT_COMMAND:<name>`, `CHAT_MESSAGE`, `PLAYER_WOUNDED`, `PLAYER_DIED`,
-`TEAMKILL`, `PLAYER_TEAM_CHANGE`, `NEW_GAME`, `ROUND_ENDED`, `UPDATED_PLAYER_INFORMATION`.
-Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.switchTeam(anyID)`,
-`.execute(rawAdminCommand)`. Full catalog + every payload shape: `references/api-reference.md`.
+`TEAMKILL`, `PLAYER_TEAM_CHANGE`, `NEW_GAME`, `ROUND_ENDED`, `UPDATED_PLAYER_INFORMATION`,
+`CAPTURE_ZONE_CAPTURED`/`CAPTURE_ZONE_NEUTRALIZED`. Live tickets: `this.server.tickets`.
+Act via `this.server.rcon.warn(anyID, msg)`, `.broadcast(msg)`, `.kick(anyID, reason)`,
+`.switchTeam(anyID)`, `.execute(rawAdminCommand)`. Full catalog + every payload shape:
+`references/api-reference.md`.
 
 Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
 - **Team by faction short name, not `teamID`.** No faction field exists; `teamID` 1/2 flips each
@@ -110,12 +112,14 @@ Three non-obvious patterns (see `references/api-reference.md` §3, §4, §7):
 
 | Mistake | Fix |
 |---|---|
-| `this.server.removeEventListener(...)` in `unmount` | **It does not exist** on the Node `EventEmitter` server — it throws `TypeError` and the listener leaks. Use `this.server.removeListener(...)` (or `.off(...)`). Many bundled/example plugins (including `activity-tracker`) use the broken form — do not copy it. |
+| `this.server.removeEventListener(...)` in `unmount` | **It does not exist** on the Node `EventEmitter` server — it throws `TypeError` and the listener leaks. Use `this.server.removeListener(...)` (or `.off(...)`). Core plugins before Oct 2026 and many third-party/example plugins use the broken form — do not copy it. |
 | `.on(event, (data) => this.onFoo(data))` then `.removeListener(event, this.onFoo)` in `unmount` | `removeListener` matches by function **reference**, not name — the anonymous arrow registered in `mount` is a different function object than `this.onFoo`, so the call is a silent no-op and the listener leaks (no error thrown). Bind once in the constructor (`this.onFoo = this.onFoo.bind(this)`) and pass that same bound reference — never a fresh wrapper — to both `.on()` and `.removeListener()`. |
 | Relying on `PLAYER_DISCONNECTED` as your sole departure trigger | It catches clean disconnects only (not kicks/bans) and can fire with a `null` player. Use it as a fast supplement; diff `server.players` on `UPDATED_PLAYER_INFORMATION` for complete detection. |
-| `this.server.rcon.kick(...)` or other invented methods | Only `broadcast`/`setFogOfWar`/`warn`/`ban`/`switchTeam`/`get*`/`execute` exist. Kick = `execute('AdminKick "<id>" <reason>')`. |
+| Invented RCON methods (`rcon.changeLayer(...)`, `rcon.disbandSquad(...)`) | Only `broadcast`/`setFogOfWar`/`warn`/`kick`/`ban`/`switchTeam`/`forceTeamChange`/`get*`/`execute` exist. Everything else = `execute('Admin…')`. |
+| `const squads = await this.server.rcon.getSquads()` | Since Oct 2026 it returns a tuple `[squads, tickets]`. Read `this.server.squads` / `this.server.tickets` instead. |
+| `if (data.teamID === player.teamID)` on `CAPTURE_ZONE_*` / `DEPLOYABLE_SPAWNED` | Those payloads carry `teamID` as a **string** (`"1"`) straight from the log regex; `player.teamID` is a number. Compare with `Number(data.teamID)`. |
 | Reading invented payload fields (`data.location.x`, `health`) | They do not exist. Use only the fields listed in `api-reference.md`. Do not write dead branches for fields that "might" exist later. |
 | `setInterval`/`setTimeout` not cleared in `unmount` | Store the handle and clear it in `unmount` alongside listener removal. |
 | A `required: true` option whose config value equals its `default` | `BasePlugin` throws at load. Required options must be given a non-default value in config. |
 | `"plugin"` name in config ≠ exported class name | They must match exactly; SquadJS loads plugins by class name. |
-| Using `steamID` as the primary key | `eosID` is the primary id (always present); `steamID` is the fallback. |
+| Using `steamID` as the primary key | `eosID` is the primary id (always present); `steamID` is the fallback and is `null` for Epic Games Store players. |
